@@ -1,0 +1,1633 @@
+diff --git a/Sources/Vorssaint/App/FeatureRuntime.swift b/Sources/Vorssaint/App/FeatureRuntime.swift
+index 22415e03..1b94a2c4 100644
+--- a/Sources/Vorssaint/App/FeatureRuntime.swift
++++ b/Sources/Vorssaint/App/FeatureRuntime.swift
+@@ -121,6 +121,7 @@ final class FeatureRuntime: ObservableObject {
+             if available {
+                 loadedThisSession.insert(feature)
+                 offerableThisSession.remove(feature)
++                if feature == .notchKDEConnect { KDEConnectService.warnIfMissing() }
+             }
+             Self.bindings[feature]?()
+             changed = true
+@@ -374,6 +375,12 @@ final class FeatureRuntime: ObservableObject {
+             if AppFeature.notch.isAvailable { NotchService.shared.syncWithPreferences() }
+             else { NotchWatchService.shared.stop() }
+         },
++        .notchKDEConnect: {
++            if AppFeature.notch.isAvailable { NotchService.shared.syncWithPreferences() }
++        },
++        .notchAirDrop: {
++            if AppFeature.notch.isAvailable { NotchService.shared.syncWithPreferences() }
++        },
+         // Leaving folds the wings it rests in, and coming back greets.
+         .notchMascot: {
+             if AppFeature.notch.isAvailable { NotchService.shared.syncWithPreferences() }
+diff --git a/Sources/Vorssaint/Core/Defaults.swift b/Sources/Vorssaint/Core/Defaults.swift
+index 2b58a0d9..2ed7efc3 100644
+--- a/Sources/Vorssaint/Core/Defaults.swift
++++ b/Sources/Vorssaint/Core/Defaults.swift
+@@ -847,6 +847,15 @@ enum DefaultsKey {
+     static let notchDownloadsFolderBookmark = "notchDownloadsFolderBookmark"
+     // Watch: any part of any window read live in the island.
+     static let notchWatchEnabled = "notchWatchEnabled"
++    // KDE Connect: a drop target per paired device beside the shelf.
++    static let notchKDEConnectEnabled = "notchKDEConnectEnabled"
++    // AirDrop: a drop target beside the shelf that opens the AirDrop window.
++    static let notchAirDropEnabled = "notchAirDropEnabled"
++    // Drop targets: motion on hover, shortcuts while dragging out of the shelf.
++    static let notchDropAnimateShelf = "notchDropAnimateShelf"
++    static let notchDropAnimateSend = "notchDropAnimateSend"
++    static let notchShelfSendTargets = "notchShelfSendTargets"
++    static let notchKDEConnectAutoLaunch = "notchKDEConnectAutoLaunch"
+     static let notchWatchSound = "notchWatchSound"
+     static let notchWatchCondition = "notchWatchCondition"
+     static let notchCalendarEnabled = "notchCalendarEnabled"
+@@ -1501,6 +1510,12 @@ enum Defaults {
+         DefaultsKey.notchLockScreen: false,
+         DefaultsKey.notchLockSounds: false,
+         DefaultsKey.notchMascotEnabled: false,
++        DefaultsKey.notchKDEConnectEnabled: true,
++        DefaultsKey.notchAirDropEnabled: true,
++        DefaultsKey.notchDropAnimateShelf: true,
++        DefaultsKey.notchDropAnimateSend: true,
++        DefaultsKey.notchShelfSendTargets: true,
++        DefaultsKey.notchKDEConnectAutoLaunch: true,
+         DefaultsKey.notchMascotVisits: true,
+         DefaultsKey.notchMascotReactions: true,
+         DefaultsKey.notchMascotStyle: NotchMascotStyle.minimal.rawValue,
+diff --git a/Sources/Vorssaint/Core/FeatureCatalog.swift b/Sources/Vorssaint/Core/FeatureCatalog.swift
+index 03c1806a..a441023c 100644
+--- a/Sources/Vorssaint/Core/FeatureCatalog.swift
++++ b/Sources/Vorssaint/Core/FeatureCatalog.swift
+@@ -31,7 +31,7 @@ enum AppFeature: String, CaseIterable {
+          commandBar, screenRecorder, wallpaper, killProcess, portManager
+     // Dynamic Island, then its extensions
+     case notch, notchCalendar, notchNotifications, notchGestures, notchTimer, notchAccessories, notchLyrics,
+-         notchQueue, notchLiveEqualizer, notchDownloads, notchAgents, notchWatch, notchMascot
++         notchQueue, notchLiveEqualizer, notchDownloads, notchAgents, notchWatch, notchMascot, notchKDEConnect, notchAirDrop
+     // System monitor, one entry per metric family (temperatures live with
+     // their parent metric: CPU temp with CPU, battery temp with power).
+     case monitorCPU, monitorGPU, monitorMemory, monitorNetwork, monitorDisk, monitorPower, connectedDevices, fanControl
+@@ -83,7 +83,7 @@ extension AppFeature {
+         // Watch asks when an area is chosen and checks on every reading. The
+         // companion uses no permission at all.
+         case .screenOCR, .cleaningMode, .screenshot, .commandBar, .screenRecorder, .wallpaper, .notchWatch,
+-             .notchMascot:
++             .notchMascot, .notchKDEConnect, .notchAirDrop:
+             return false
+         default:
+             return true
+@@ -119,7 +119,7 @@ extension AppFeature {
+             return .tools
+         case .notch, .notchCalendar, .notchNotifications, .notchGestures, .notchTimer, .notchAccessories,
+              .notchLyrics, .notchQueue, .notchLiveEqualizer, .notchDownloads, .notchAgents, .notchWatch,
+-             .notchMascot:
++             .notchMascot, .notchKDEConnect, .notchAirDrop:
+             return .dynamicIsland
+         case .monitorCPU, .monitorGPU, .monitorMemory, .monitorNetwork, .monitorDisk, .monitorPower,
+              .connectedDevices, .fanControl:
+@@ -195,6 +195,8 @@ extension AppFeature {
+         case .notchAgents: return "sparkles"
+         case .notchWatch: return "eye"
+         case .notchMascot: return "face.smiling"
++        case .notchKDEConnect: return "iphone.radiowaves.left.and.right"
++        case .notchAirDrop: return "dot.radiowaves.left.and.right"
+         case .notch: return "macbook"
+         case .radialMenu: return "circle.grid.cross"
+         case .scratchpad: return "note.text"
+@@ -269,6 +271,8 @@ extension AppFeature {
+         case .notchAgents: return [DefaultsKey.notchAgentsEnabled]
+         case .notchWatch: return [DefaultsKey.notchWatchEnabled]
+         case .notchMascot: return [DefaultsKey.notchMascotEnabled]
++        case .notchKDEConnect: return [DefaultsKey.notchKDEConnectEnabled]
++        case .notchAirDrop: return [DefaultsKey.notchAirDropEnabled]
+         case .notch: return [DefaultsKey.notchEnabled]
+         case .radialMenu: return [DefaultsKey.radialMenuEnabled]
+         case .clipboardHistory: return [DefaultsKey.clipboardHistoryEnabled]
+@@ -337,6 +341,10 @@ extension AppFeature {
+         case .notchAgents: return []
+         // It only draws, and hears of what happens from the island itself.
+         case .notchMascot: return []
++        // Files go out through KDE Connect's own command line tool.
++        case .notchKDEConnect: return []
++        // The system's own AirDrop window does the sending.
++        case .notchAirDrop: return []
+         // The bars read the player's own audio output, which macOS gates
+         // behind the same permission the mixer and the recorder ask for.
+         case .notchLiveEqualizer: return [.audioCapture]
+@@ -418,7 +426,7 @@ extension AppFeature {
+     /// Agents reads local session histories, and the companion changes the
+     /// resting island. Both are separate choices when installing the island.
+     static var dynamicIslandInitialExtensions: [AppFeature] {
+-        dynamicIslandExtensions.filter { $0 != .notchMascot && $0 != .notchAgents }
++        dynamicIslandExtensions.filter { $0 != .notchMascot && $0 != .notchAgents && $0 != .notchKDEConnect && $0 != .notchAirDrop }
+     }
+ 
+     var initialInstallGroup: [AppFeature] {
+@@ -484,7 +492,7 @@ extension AppFeature {
+              .connectedDevices:
+             return true
+         case .focusFollowsMouse, .scrollHorizontal, .linearScroll, .diskImageInstaller, .audioPriority,
+-             .wallpaper, .killProcess, .portManager, .fanControl, .notchMascot, .spacesOrder:
++             .wallpaper, .killProcess, .portManager, .fanControl, .notchMascot, .notchKDEConnect, .notchAirDrop, .spacesOrder:
+             return false
+         }
+     }
+diff --git a/Sources/Vorssaint/Core/FeaturePresets.swift b/Sources/Vorssaint/Core/FeaturePresets.swift
+index ffb55fda..8a250ea2 100644
+--- a/Sources/Vorssaint/Core/FeaturePresets.swift
++++ b/Sources/Vorssaint/Core/FeaturePresets.swift
+@@ -125,6 +125,8 @@ extension AppFeature {
+         // A blink every few seconds and a visit every few minutes, both
+         // drawn by Core Animation, with one timer waiting for the next visit.
+         case .notchMascot: return .periodic
++        // Runs KDE Connect's tool only when a drag reaches the island.
++        case .notchKDEConnect, .notchAirDrop: return .idle
+         case .notchAccessories: return .periodic
+         // Log changes arrive as file events; a timer keeps countdowns and
+         // limits current while the section is on.
+diff --git a/Sources/Vorssaint/Core/KDEConnectStrings.swift b/Sources/Vorssaint/Core/KDEConnectStrings.swift
+new file mode 100644
+index 00000000..52e8e631
+--- /dev/null
++++ b/Sources/Vorssaint/Core/KDEConnectStrings.swift
+@@ -0,0 +1,54 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright (C) 2026 Vorssaint
++
++import Foundation
++
++struct KDEConnectStrings {
++    let title: String
++    let hubDescription: String
++    let dropHint: String
++    let noDevices: String
++    let notInstalled: String
++    let sendingFormat: String
++    let sentFormat: String
++    let failedFormat: String
++    let refresh: String
++    let notInstalledDetail: String
++    let download: String
++    let later: String
++    let closed: String
++    let launching: String
++}
++
++extension FeatureStrings {
++    static func kdeConnect(_ language: AppLanguage) -> KDEConnectStrings {
++        switch language {
++        case .it: return KDEConnectStrings(
++            title: "Integrazione KDE Connect",
++            hubDescription: "Trascina un file sull’isola e rilascialo su un dispositivo associato in KDE Connect per inviarglielo. Con lo Shelf attivo l’isola si divide in due.",
++            dropHint: "Trascina qui i file per inviarli ai tuoi dispositivi",
++            noDevices: "Nessun dispositivo raggiungibile",
++            notInstalled: "KDE Connect non è installato",
++            sendingFormat: "Invio a %@…",
++            sentFormat: "Inviato a %@",
++            failedFormat: "Invio a %@ non riuscito",
++            refresh: "Aggiorna dispositivi",
++            notInstalledDetail: "L’integrazione usa KDE Connect per inviare i file. Installalo e associa il telefono, poi trascina i file sull’isola.",
++            download: "Scarica KDE Connect", later: "Più tardi",
++            closed: "KDE Connect è chiuso", launching: "Avvio di KDE Connect…")
++        default: return KDEConnectStrings(
++            title: "KDE Connect Integration",
++            hubDescription: "Drag a file onto the island and drop it on a device paired in KDE Connect to send it. With the Shelf on, the island splits in two.",
++            dropHint: "Drop files here to send them to your devices",
++            noDevices: "No reachable devices",
++            notInstalled: "KDE Connect is not installed",
++            sendingFormat: "Sending to %@…",
++            sentFormat: "Sent to %@",
++            failedFormat: "Couldn’t send to %@",
++            refresh: "Refresh devices",
++            notInstalledDetail: "The integration sends files through KDE Connect. Install it and pair your phone, then drag files onto the island.",
++            download: "Download KDE Connect", later: "Later",
++            closed: "KDE Connect is closed", launching: "Starting KDE Connect…")
++        }
++    }
++}
+diff --git a/Sources/Vorssaint/Core/NotchAirDropStrings.swift b/Sources/Vorssaint/Core/NotchAirDropStrings.swift
+new file mode 100644
+index 00000000..fd683a53
+--- /dev/null
++++ b/Sources/Vorssaint/Core/NotchAirDropStrings.swift
+@@ -0,0 +1,28 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright (C) 2026 Vorssaint
++
++import Foundation
++
++struct NotchAirDropStrings {
++    let title: String
++    let hubDescription: String
++    let tile: String
++    let unavailable: String
++}
++
++extension FeatureStrings {
++    static func notchAirDrop(_ language: AppLanguage) -> NotchAirDropStrings {
++        switch language {
++        case .it: return NotchAirDropStrings(
++            title: "AirDrop nell’isola",
++            hubDescription: "Trascina file o link sull’isola e rilasciali su AirDrop: si apre subito la finestra di AirDrop con i dispositivi vicini.",
++            tile: "AirDrop",
++            unavailable: "AirDrop non disponibile")
++        default: return NotchAirDropStrings(
++            title: "AirDrop in the Island",
++            hubDescription: "Drag files or links onto the island and drop them on AirDrop: the AirDrop window opens right away with nearby devices.",
++            tile: "AirDrop",
++            unavailable: "AirDrop unavailable")
++        }
++    }
++}
+diff --git a/Sources/Vorssaint/Core/NotchSendStrings.swift b/Sources/Vorssaint/Core/NotchSendStrings.swift
+new file mode 100644
+index 00000000..fc5ac7e5
+--- /dev/null
++++ b/Sources/Vorssaint/Core/NotchSendStrings.swift
+@@ -0,0 +1,52 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright (C) 2026 Vorssaint
++
++import Foundation
++
++struct NotchSendStrings {
++    let section: String
++    let animateShelf: String
++    let animateShelfHint: String
++    let animateSend: String
++    let animateSendHint: String
++    let shelfSend: String
++    let shelfSendHint: String
++    let autoLaunch: String
++    let autoLaunchHint: String
++    let sendTo: String
++    let previewHint: String
++    let phone: String
++}
++
++extension FeatureStrings {
++    static func notchSend(_ language: AppLanguage) -> NotchSendStrings {
++        switch language {
++        case .it: return NotchSendStrings(
++            section: "Destinazioni di rilascio",
++            animateShelf: "Animazione dello Shelf",
++            animateShelfHint: "Aggiunge un’animazione ai riquadri Shelf e Ottimizza quando ci passi sopra con un file.",
++            animateSend: "Animazione di AirDrop e KDE Connect",
++            animateSendHint: "Anima i riquadri di AirDrop e dei dispositivi quando ci passi sopra con un file.",
++            shelfSend: "Invio dallo Shelf",
++            shelfSendHint: "Mentre trascini un file fuori dallo Shelf, in basso compaiono AirDrop e i tuoi dispositivi.",
++            autoLaunch: "Apri KDE Connect automaticamente",
++            autoLaunchHint: "Se è chiuso, lo avvia in background quando trascini un file.",
++            sendTo: "Invia a",
++            previewHint: "Passa il mouse su queste opzioni per vederle nell’anteprima.",
++            phone: "Telefono")
++        default: return NotchSendStrings(
++            section: "Drop targets",
++            animateShelf: "Shelf animation",
++            animateShelfHint: "Adds an animation to the Shelf and Optimize tiles when a file passes over them.",
++            animateSend: "AirDrop and KDE Connect animation",
++            animateSendHint: "Animates the AirDrop and device tiles when a file passes over them.",
++            shelfSend: "Send from the Shelf",
++            shelfSendHint: "While you drag a file out of the Shelf, AirDrop and your devices appear along the bottom.",
++            autoLaunch: "Open KDE Connect automatically",
++            autoLaunchHint: "If it is closed, starts it in the background when you drag a file.",
++            sendTo: "Send to",
++            previewHint: "Point at these options to see them in the preview.",
++            phone: "Phone")
++        }
++    }
++}
+diff --git a/Sources/Vorssaint/Services/Notch/KDEConnectService.swift b/Sources/Vorssaint/Services/Notch/KDEConnectService.swift
+new file mode 100644
+index 00000000..271a8b2d
+--- /dev/null
++++ b/Sources/Vorssaint/Services/Notch/KDEConnectService.swift
+@@ -0,0 +1,177 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright (C) 2026 Vorssaint
++
++import AppKit
++import Combine
++
++/// Sends files to phones and computers paired in KDE Connect, through the
++/// command line tool bundled inside KDE Connect.app. Nothing runs at rest:
++/// devices are listed when a drag reaches the island or the page opens.
++final class KDEConnectService: ObservableObject {
++    static let shared = KDEConnectService()
++
++    enum SendState: Equatable {
++        case sending(device: String)
++        case sent(device: String)
++        case failed(device: String)
++    }
++
++    /// KDE Connect's own app hosts the daemon its tool talks to, so the tool
++    /// only answers while that app runs.
++    enum AppState: Equatable { case notInstalled, closed, launching, ready }
++
++    @Published private(set) var devices: [KDEConnectDevice] = []
++    @Published private(set) var isRefreshing = false
++    @Published private(set) var appState: AppState = KDEConnectService.isInstalled ? .ready : .notInstalled
++    @Published private(set) var sendState: SendState?
++    private let queue = DispatchQueue(label: "com.vorssaint.kdeconnect", qos: .userInitiated)
++    private var clearWork: DispatchWorkItem?
++    private var launchRetries = 0
++    static let bundleID = "org.kde.kdeconnect"
++    static let downloadURL = URL(string: "https://kdeconnect.kde.org/download.html")!
++
++    private init() {}
++
++    static var appURL: URL? {
++        var apps: [URL] = []
++        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) { apps.append(url) }
++        apps.append(URL(fileURLWithPath: "/Applications/KDE Connect.app"))
++        apps.append(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/KDE Connect.app"))
++        return apps.first { FileManager.default.isExecutableFile(atPath: cli(in: $0).path) }
++    }
++
++    private static func cli(in app: URL) -> URL { app.appendingPathComponent("Contents/MacOS/kdeconnect-cli") }
++    static var cliURL: URL? { appURL.map(cli(in:)) }
++    static var isInstalled: Bool { appURL != nil }
++    static var isRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty }
++
++    /// The island offers a KDE Connect column: the feature is installed and
++    /// on. A missing or closed KDE Connect shows in the column itself.
++    static var isActive: Bool {
++        AppFeature.notchKDEConnect.isAvailable
++            && UserDefaults.standard.bool(forKey: DefaultsKey.notchKDEConnectEnabled)
++    }
++
++    /// Installing the feature without KDE Connect on this Mac says so at once,
++    /// with the way to get it.
++    static func warnIfMissing() {
++        guard !isInstalled else { return }
++        DispatchQueue.main.async {
++            let text = FeatureStrings.kdeConnect(L10n.shared.language)
++            let alert = NSAlert()
++            alert.messageText = text.notInstalled
++            alert.informativeText = text.notInstalledDetail
++            alert.addButton(withTitle: text.download)
++            alert.addButton(withTitle: text.later)
++            NSApp.activate(ignoringOtherApps: true)
++            if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(downloadURL) }
++        }
++    }
++
++    /// Files, or web links, that KDE Connect can share.
++    static func items(in pasteboard: NSPasteboard) -> [URL] {
++        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] ?? []
++        return urls.filter { $0.isFileURL || $0.scheme == "http" || $0.scheme == "https" }
++    }
++
++    /// Lists reachable devices. A closed KDE Connect is started hidden first,
++    /// and asked again while it finds its devices.
++    func refresh() {
++        guard let app = Self.appURL else { setAppState(.notInstalled); if !devices.isEmpty { devices = [] }; return }
++        guard Self.isRunning else {
++            if UserDefaults.standard.bool(forKey: DefaultsKey.notchKDEConnectAutoLaunch) { launch(app) }
++            else { setAppState(.closed); if !devices.isEmpty { devices = [] } }
++            return
++        }
++        if appState != .launching || !devices.isEmpty { setAppState(.ready) }
++        guard !isRefreshing else { return }
++        let cli = Self.cli(in: app)
++        isRefreshing = true
++        queue.async { [weak self] in
++            let output = Self.run(cli, ["--list-available", "--id-name-only"]).output
++            let found = output.split(separator: "\n").compactMap { line -> KDEConnectDevice? in
++                let parts = line.split(separator: " ", maxSplits: 1)
++                guard parts.count == 2 else { return nil }
++                return KDEConnectDevice(id: String(parts[0]), name: String(parts[1]))
++            }
++            DispatchQueue.main.async {
++                guard let self else { return }
++                self.isRefreshing = false
++                if self.devices != found { self.devices = found }
++                if self.appState == .launching {
++                    if !found.isEmpty || self.launchRetries >= 8 { self.setAppState(.ready); self.launchRetries = 0 }
++                    else { self.retryAfterLaunch() }
++                }
++            }
++        }
++    }
++
++    private func launch(_ app: URL) {
++        guard appState != .launching else { return }
++        setAppState(.launching)
++        if !devices.isEmpty { devices = [] }
++        launchRetries = 0
++        let configuration = NSWorkspace.OpenConfiguration()
++        configuration.activates = false
++        configuration.hides = true
++        configuration.addsToRecentItems = false
++        NSWorkspace.shared.openApplication(at: app, configuration: configuration) { [weak self] running, _ in
++            DispatchQueue.main.async {
++                guard let self else { return }
++                if running == nil { self.setAppState(.closed) } else { self.retryAfterLaunch() }
++            }
++        }
++    }
++
++    /// The daemon needs a moment after launch before it answers and finds devices.
++    private func retryAfterLaunch() {
++        launchRetries += 1
++        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
++            guard let self, self.appState == .launching else { return }
++            self.refresh()
++        }
++    }
++
++    private func setAppState(_ state: AppState) {
++        if appState != state { appState = state }
++    }
++
++    @discardableResult
++    func send(_ urls: [URL], to deviceID: String) -> Bool {
++        guard let cli = Self.cliURL, !urls.isEmpty,
++              let device = devices.first(where: { $0.id == deviceID }) else { return false }
++        setState(.sending(device: device.name))
++        queue.async { [weak self] in
++            let ok = urls.allSatisfy { url in
++                Self.run(cli, ["--device", deviceID, "--share", url.isFileURL ? url.path : url.absoluteString]).status == 0
++            }
++            DispatchQueue.main.async {
++                self?.setState(ok ? .sent(device: device.name) : .failed(device: device.name))
++                if !ok { self?.refresh() }
++            }
++        }
++        return true
++    }
++
++    private func setState(_ state: SendState) {
++        clearWork?.cancel(); clearWork = nil
++        sendState = state
++        if case .sending = state { return }
++        let work = DispatchWorkItem { [weak self] in self?.sendState = nil }
++        clearWork = work
++        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
++    }
++
++    private static func run(_ executable: URL, _ arguments: [String]) -> (status: Int32, output: String) {
++        let process = Process()
++        process.executableURL = executable
++        process.arguments = arguments
++        let pipe = Pipe()
++        process.standardOutput = pipe
++        process.standardError = FileHandle.nullDevice
++        do { try process.run() } catch { return (-1, "") }
++        let data = pipe.fileHandleForReading.readDataToEndOfFile()
++        process.waitUntilExit()
++        return (process.terminationStatus, String(decoding: data, as: UTF8.self))
++    }
++}
+diff --git a/Sources/Vorssaint/Services/Notch/NotchAirDropService.swift b/Sources/Vorssaint/Services/Notch/NotchAirDropService.swift
+new file mode 100644
+index 00000000..7e1dd311
+--- /dev/null
++++ b/Sources/Vorssaint/Services/Notch/NotchAirDropService.swift
+@@ -0,0 +1,31 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright (C) 2026 Vorssaint
++
++import AppKit
++
++/// Hands dropped files to the system's AirDrop window. macOS offers no public
++/// way to list nearby devices, so the window itself lets the user pick one.
++enum NotchAirDropService {
++    static var isActive: Bool {
++        AppFeature.notchAirDrop.isAvailable
++            && UserDefaults.standard.bool(forKey: DefaultsKey.notchAirDropEnabled)
++    }
++
++    /// Files, or web links, that AirDrop can send.
++    static func items(in pasteboard: NSPasteboard) -> [URL] {
++        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] ?? []
++        return urls.filter { $0.isFileURL || $0.scheme == "http" || $0.scheme == "https" }
++    }
++
++    @discardableResult
++    static func send(_ urls: [URL]) -> Bool {
++        guard !urls.isEmpty, let service = NSSharingService(named: .sendViaAirDrop),
++              service.canPerform(withItems: urls) else { return false }
++        // After the drag session ends, so the AirDrop window comes up in front.
++        DispatchQueue.main.async {
++            NSApp.activate(ignoringOtherApps: true)
++            service.perform(withItems: urls)
++        }
++        return true
++    }
++}
+diff --git a/Sources/Vorssaint/Services/Notch/NotchDropSupport.swift b/Sources/Vorssaint/Services/Notch/NotchDropSupport.swift
+new file mode 100644
+index 00000000..5410b628
+--- /dev/null
++++ b/Sources/Vorssaint/Services/Notch/NotchDropSupport.swift
+@@ -0,0 +1,43 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright (C) 2026 Vorssaint
++
++import CoreGraphics
++
++struct KDEConnectDevice: Identifiable, Equatable {
++    let id: String
++    let name: String
++}
++
++/// Where a file dragged over the open island lands.
++enum NotchDropTarget: Hashable {
++    case shelf, media, airDrop, device(String)
++}
++
++/// The island's drop chooser: up to four equal columns side by side (shelf,
++/// media optimisation, AirDrop, KDE Connect), the KDE column split into one row per
++/// reachable device. The view draws the same split, so hit-testing here
++/// matches what is on screen.
++enum NotchDropLayout {
++    static func target(at point: CGPoint, in geometry: NotchGeometry, size: CGSize,
++                       shelf: Bool, media: Bool, airDrop: Bool = false,
++                       devices: [KDEConnectDevice]?) -> NotchDropTarget? {
++        let spacing = NotchFileToolsSupport.dropSpacing
++        let content = geometry.contentSize(for: size)
++        let area = CGRect(x: (size.width - content.width) / 2,
++                          y: geometry.headerTopInset + geometry.headerRowHeight + NotchLayout.spacing,
++                          width: content.width, height: content.height)
++        var columns: [NotchDropTarget?] = []
++        if shelf { columns.append(.shelf) }
++        if media { columns.append(.media) }
++        if airDrop { columns.append(.airDrop) }
++        if devices != nil { columns.append(nil) }
++        guard !columns.isEmpty, area.contains(point) else { return nil }
++        let width = (area.width - spacing * CGFloat(columns.count - 1)) / CGFloat(columns.count)
++        let index = min(columns.count - 1, Int((point.x - area.minX) / (width + spacing)))
++        if let column = columns[index] { return column }
++        guard let devices, !devices.isEmpty else { return nil }
++        let height = (area.height - spacing * CGFloat(devices.count - 1)) / CGFloat(devices.count)
++        let row = min(devices.count - 1, max(0, Int((point.y - area.minY) / (height + spacing))))
++        return .device(devices[row].id)
++    }
++}
+diff --git a/Sources/Vorssaint/Services/Notch/NotchSendService.swift b/Sources/Vorssaint/Services/Notch/NotchSendService.swift
+new file mode 100644
+index 00000000..5bb9a47c
+--- /dev/null
++++ b/Sources/Vorssaint/Services/Notch/NotchSendService.swift
+@@ -0,0 +1,31 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright (C) 2026 Vorssaint
++
++import Foundation
++
++/// AirDrop and KDE Connect together: the island's send targets.
++enum NotchSendSupport {
++    static var anyActive: Bool { KDEConnectService.isActive || NotchAirDropService.isActive }
++
++    /// The island shows its drop area during a file drag for the send
++    /// targets alone, even with the shelf in its own window or switched off.
++    static func revealsDrag(in defaults: UserDefaults = .standard) -> Bool {
++        anyActive && NotchSupport.showsFiles(in: defaults) && defaults.bool(forKey: DefaultsKey.notchDragReveal)
++    }
++}
++
++/// A shelf tile is being dragged out, from the island or from the shelf's
++/// own window: both show their small send targets for its length.
++final class ShelfSendState: ObservableObject {
++    static let shared = ShelfSendState()
++    @Published private(set) var draggingOut = false
++    private init() {}
++
++    func begin() {
++        guard UserDefaults.standard.bool(forKey: DefaultsKey.notchShelfSendTargets), NotchSendSupport.anyActive else { return }
++        if KDEConnectService.isActive { KDEConnectService.shared.refresh() }
++        draggingOut = true
++    }
++
++    func end() { if draggingOut { draggingOut = false } }
++}
+diff --git a/Sources/Vorssaint/Services/Notch/NotchService.swift b/Sources/Vorssaint/Services/Notch/NotchService.swift
+index dbcd4e56..75a8231b 100644
+--- a/Sources/Vorssaint/Services/Notch/NotchService.swift
++++ b/Sources/Vorssaint/Services/Notch/NotchService.swift
+@@ -113,7 +113,16 @@ final class NotchService: ObservableObject {
+     @Published private(set) var peeking = false
+     @Published private(set) var dragPlaceholder = false
+     @Published private(set) var choosingFileDropDestination = false
+-    @Published private(set) var targetsMediaDrop = false
++    @Published private(set) var dropTarget: NotchDropTarget?
++    /// The columns the drop chooser shows for the drag in progress.
++    @Published private(set) var dropOffersShelf = false
++    @Published private(set) var dropOffersMedia = false
++    @Published private(set) var dropOffersKDEConnect = false
++    @Published private(set) var dropOffersAirDrop = false
++    /// A shelf tile is being dragged out: the files page offers AirDrop and
++    /// KDE Connect as small drop targets along its bottom edge.
++    @Published private(set) var shelfDragOut = false
++    var targetsMediaDrop: Bool { dropTarget == .media }
+     @Published private(set) var selectedMetric: MetricDetailKind?
+     @Published private(set) var captureControls: ScreenCaptureSelectionOptions?
+     @Published private(set) var captureControlsCollapsed = false
+@@ -1119,7 +1128,7 @@ final class NotchService: ObservableObject {
+         if signature != settingsSignature {
+             settingsSignature = signature
+             bindEvents()
+-            if AppFeature.shelf.isAvailable { ShelfService.shared.syncWithPreferences() }
++            if AppFeature.shelf.isAvailable || NotchSendSupport.anyActive { ShelfService.shared.syncWithPreferences() }
+         }
+         if !NotchSupport.routes(.capture), captureContent != nil {
+             let fallback = captureFallback
+@@ -1184,7 +1193,7 @@ final class NotchService: ObservableObject {
+         session = NotchSessionState()
+         if AppFeature.mixer.isAvailable { PreciseVolumeRollerService.shared.syncWithPreferences() }
+         if AppFeature.brightness.isAvailable { BrightnessService.shared.syncWithPreferences() }
+-        if AppFeature.shelf.isAvailable { ShelfService.shared.syncWithPreferences() }
++        if AppFeature.shelf.isAvailable || NotchSendSupport.anyActive { ShelfService.shared.syncWithPreferences() }
+         fallback?()
+     }
+ 
+@@ -1880,9 +1889,14 @@ final class NotchService: ObservableObject {
+     }
+ 
+     func fileDragChanged(_ active: Bool, internalDrag: Bool = false) {
+-        guard running, !suspended, internalDrag || NotchSupport.routesShelf() else { return }
++        guard running, !suspended, internalDrag || NotchSupport.routesShelf() || NotchSendSupport.revealsDrag() else { return }
+         heldDrag = active && internalDrag
+-        if active, !internalDrag, NotchSupport.revealsShelfDrag(), !expanded {
++        let sendsOut = active && internalDrag && offersShelfSend
++        if shelfDragOut != sendsOut {
++            shelfDragOut = sendsOut
++            if sendsOut, KDEConnectService.isActive { KDEConnectService.shared.refresh() }
++        }
++        if active, !internalDrag, NotchSupport.revealsShelfDrag() || NotchSendSupport.revealsDrag(), !expanded {
+             mutatePresentation { dragPlaceholder = true; peeking = false }
+         } else if !active {
+             mutatePresentation { dragPlaceholder = false }
+@@ -2116,25 +2130,81 @@ final class NotchService: ObservableObject {
+             && UserDefaults.standard.bool(forKey: DefaultsKey.shelfEnabled)
+     }
+ 
++    var canAcceptKDEConnectDrop: Bool {
++        acceptsUserInteraction && captureControls == nil && modules.contains(.files) && KDEConnectService.isActive
++    }
++
++    var offersShelfSend: Bool {
++        UserDefaults.standard.bool(forKey: DefaultsKey.notchShelfSendTargets) && modules.contains(.files)
++            && (KDEConnectService.isActive || NotchAirDropService.isActive)
++    }
++
++    private var fileDropEndWork: DispatchWorkItem?
++
++    /// A file leaving the open island keeps the chooser on screen while the
++    /// island closes, so the shelf page does not flash in between; coming
++    /// back in time picks the drag up where it was.
++    func leaveFileDrop() {
++        fileDropEndWork?.cancel(); fileDropEndWork = nil
++        guard choosingFileDropDestination else { endFileDrop(); return }
++        if dropTarget != nil { dropTarget = nil }
++        let work = DispatchWorkItem { [weak self] in
++            self?.fileDropEndWork = nil
++            self?.endFileDrop()
++        }
++        fileDropEndWork = work
++        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
++    }
++
++    func cancelFileDropLeave() {
++        fileDropEndWork?.cancel(); fileDropEndWork = nil
++    }
++
++    func shelfDragEnded() {
++        if shelfDragOut { shelfDragOut = false }
++    }
++
++    var canAcceptAirDropDrop: Bool {
++        acceptsUserInteraction && captureControls == nil && modules.contains(.files) && NotchAirDropService.isActive
++    }
++
+     func beginFileDrop(_ pasteboard: NSPasteboard) {
+-        guard canAcceptFileDrop else { return }
+-        choosingFileDropDestination = NotchFileToolsService.shared.mediaDropContent(for: pasteboard) != nil
+-        targetsMediaDrop = false
++        let kde = canAcceptKDEConnectDrop && !KDEConnectService.items(in: pasteboard).isEmpty
++        let airDrop = canAcceptAirDropDrop && !NotchAirDropService.items(in: pasteboard).isEmpty
++        // With the shelf in its own window, the island only sends.
++        let shelf = canAcceptFileDrop && ShelfService.shared.canAcceptPasteboard(pasteboard)
++            && (NotchSupport.routesShelf() || !(kde || airDrop))
++        guard shelf || kde || airDrop else { return }
++        if kde { KDEConnectService.shared.refresh() }
++        dropOffersShelf = shelf
++        dropOffersMedia = shelf && NotchFileToolsService.shared.mediaDropContent(for: pasteboard) != nil
++            && AppFeature.mediaTools.isAvailable
++        dropOffersKDEConnect = kde
++        dropOffersAirDrop = airDrop
++        choosingFileDropDestination = dropOffersMedia || kde || airDrop
++        dropTarget = choosingFileDropDestination ? nil : .shelf
+         open(.files, takeFocus: false)
+     }
+ 
+     @discardableResult
+     func updateFileDrop(at point: CGPoint) -> Bool {
+-        let targeted = choosingFileDropDestination
+-            && NotchFileToolsSupport.mediaDropArea(in: expandedGeometry, size: surfaceSize).contains(point)
+-        if targetsMediaDrop != targeted { targetsMediaDrop = targeted }
+-        return !targeted || NotchFileToolsService.shared.canAcceptMediaDrop
++        guard choosingFileDropDestination else { return true }
++        let target = NotchDropLayout.target(at: point, in: expandedGeometry, size: surfaceSize,
++                                            shelf: dropOffersShelf, media: dropOffersMedia, airDrop: dropOffersAirDrop,
++                                            devices: dropOffersKDEConnect ? KDEConnectService.shared.devices : nil)
++        if dropTarget != target { dropTarget = target }
++        switch target {
++        case .media: return NotchFileToolsService.shared.canAcceptMediaDrop
++        case .none: return false
++        default: return true
++        }
+     }
+ 
+     func endFileDrop() {
+         let changed = choosingFileDropDestination
+         if changed { choosingFileDropDestination = false }
+-        if targetsMediaDrop { targetsMediaDrop = false }
++        if dropTarget != nil { dropTarget = nil }
++        dropOffersShelf = false; dropOffersMedia = false; dropOffersKDEConnect = false; dropOffersAirDrop = false
+         if changed, acceptsUserInteraction { refreshPresentation() }
+     }
+ 
+@@ -2145,7 +2215,24 @@ final class NotchService: ObservableObject {
+ 
+     func accept(_ pasteboard: NSPasteboard) -> Bool {
+         defer { endFileDrop() }
+-        guard canAcceptFileDrop else { return false }
++        if dropTarget == .airDrop {
++            guard canAcceptAirDropDrop, NotchAirDropService.send(NotchAirDropService.items(in: pasteboard)) else { return false }
++            heldDrag = false
++            dragPlaceholder = false
++            collapse()
++            reactMascot(.celebrate, patience: 30)
++            return true
++        }
++        if case .device(let id) = dropTarget {
++            guard canAcceptKDEConnectDrop,
++                  KDEConnectService.shared.send(KDEConnectService.items(in: pasteboard), to: id) else { return false }
++            heldDrag = false
++            dragPlaceholder = false
++            open(.files)
++            reactMascot(.celebrate, patience: 30)
++            return true
++        }
++        guard canAcceptFileDrop, dropTarget != nil || !choosingFileDropDestination else { return false }
+         let optimize = choosingFileDropDestination && targetsMediaDrop
+         let accepted = optimize
+             ? NotchFileToolsService.shared.openMediaDrop(pasteboard)
+@@ -3279,17 +3366,20 @@ final class NotchService: ObservableObject {
+             windowHost?.setHoverHandler { [weak self] in self?.hover($0) }
+             panel?.title = FeatureStrings.notch(L10n.shared.language).title
+         }
+-        if modules.contains(.files), AppFeature.shelf.isAvailable {
++        if modules.contains(.files), AppFeature.shelf.isAvailable || AppFeature.notchKDEConnect.isAvailable
++            || AppFeature.notchAirDrop.isAvailable {
+             windowHost?.setFileDropActions(NotchFileDropActions(
+                 canAccept: { [weak self] pasteboard in
+-                    self?.canAcceptFileDrop == true && !ShelfService.shared.isInternalDragActive
+-                        && ShelfService.shared.canAcceptPasteboard(pasteboard)
++                    guard let self, !ShelfService.shared.isInternalDragActive else { return false }
++                    return (self.canAcceptFileDrop && ShelfService.shared.canAcceptPasteboard(pasteboard))
++                        || (self.canAcceptKDEConnectDrop && !KDEConnectService.items(in: pasteboard).isEmpty)
++                        || (self.canAcceptAirDropDrop && !NotchAirDropService.items(in: pasteboard).isEmpty)
+                 },
+-                enter: { [weak self] in self?.beginFileDrop($0) },
+-                accept: { [weak self] in self?.accept($0) == true },
++                enter: { [weak self] in self?.cancelFileDropLeave(); self?.beginFileDrop($0) },
++                accept: { [weak self] in self?.cancelFileDropLeave(); return self?.accept($0) == true },
+                 exit: { [weak self] in
+                     guard let self else { return }
+-                    self.endFileDrop()
++                    self.leaveFileDrop()
+                     self.hover(self.windowHost?.contains(NSEvent.mouseLocation) == true)
+                 },
+                 update: { [weak self] in self?.updateFileDrop(at: $0) == true }))
+diff --git a/Sources/Vorssaint/Services/Notch/NotchSupport.swift b/Sources/Vorssaint/Services/Notch/NotchSupport.swift
+index cc1c443d..e5bd7d8b 100644
+--- a/Sources/Vorssaint/Services/Notch/NotchSupport.swift
++++ b/Sources/Vorssaint/Services/Notch/NotchSupport.swift
+@@ -72,7 +72,8 @@ enum NotchModule: String, CaseIterable, Identifiable {
+                 || AppFeature.screenRecorder.isAvailable(in: defaults)
+                 || AppFeature.screenOCR.isAvailable(in: defaults)
+                 || AppFeature.colorPicker.isAvailable(in: defaults)
+-        case .files: return AppFeature.shelf.isAvailable(in: defaults)
++        case .files: return AppFeature.shelf.isAvailable(in: defaults) || AppFeature.notchKDEConnect.isAvailable(in: defaults)
++            || AppFeature.notchAirDrop.isAvailable(in: defaults)
+         case .scratchpad: return AppFeature.scratchpad.isAvailable(in: defaults)
+         case .agents: return AppFeature.notchAgents.isAvailable(in: defaults)
+         case .watch: return AppFeature.notchWatch.isAvailable(in: defaults)
+diff --git a/Sources/Vorssaint/Services/Shelf/ShelfService.swift b/Sources/Vorssaint/Services/Shelf/ShelfService.swift
+index c2e8353f..8acfdd05 100644
+--- a/Sources/Vorssaint/Services/Shelf/ShelfService.swift
++++ b/Sources/Vorssaint/Services/Shelf/ShelfService.swift
+@@ -337,7 +337,8 @@ final class ShelfService: ObservableObject {
+             shortcutSelectionRequests.invalidate()
+             cancelPendingPromiseDeliveries()
+             unregisterHotkey()
+-            stopDragMonitor()
++            // The island's send targets may still want to see file drags.
++            if NotchSendSupport.revealsDrag() { startDragMonitor() } else { stopDragMonitor() }
+             hide()
+             hideDocked()
+         }
+@@ -372,11 +373,12 @@ final class ShelfService: ObservableObject {
+     /// and at least one of them wants it.
+     func syncDragMonitor() {
+         let defaults = UserDefaults.standard
+-        let wanted = defaults.bool(forKey: DefaultsKey.shelfEnabled)
++        let wanted = (defaults.bool(forKey: DefaultsKey.shelfEnabled)
+             && (defaults.bool(forKey: DefaultsKey.shelfShakeToOpen)
+                 || defaults.bool(forKey: DefaultsKey.shelfDropZoneEnabled)
+                 || defaults.bool(forKey: DefaultsKey.shelfEdgeDragEnabled)
+-                || NotchSupport.revealsShelfDrag())
++                || NotchSupport.revealsShelfDrag()))
++            || NotchSendSupport.revealsDrag()
+         if wanted { startDragMonitor() } else { stopDragMonitor() }
+         syncDockedShelf()
+     }
+@@ -473,6 +475,11 @@ final class ShelfService: ObservableObject {
+                     self.startDockedWatchdog()
+                     return
+                 }
++                // The shelf has its own window, but the island still offers
++                // AirDrop and KDE Connect for the file.
++                if NotchSendSupport.revealsDrag(), self.automaticOpenAllowed, self.isContentDragActive() {
++                    NotchService.shared.fileDragChanged(true)
++                }
+                 let defaults = UserDefaults.standard
+                 if defaults.bool(forKey: DefaultsKey.shelfShakeToOpen) {
+                     self.handleDrag(event)
+diff --git a/Sources/Vorssaint/UI/Notch/NotchDropViews.swift b/Sources/Vorssaint/UI/Notch/NotchDropViews.swift
+new file mode 100644
+index 00000000..a36ffa4b
+--- /dev/null
++++ b/Sources/Vorssaint/UI/Notch/NotchDropViews.swift
+@@ -0,0 +1,298 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright (C) 2026 Vorssaint
++
++import AppKit
++import SwiftUI
++
++extension KDEConnectService.AppState {
++    /// What the island says instead of the device list, if anything.
++    func message(_ text: KDEConnectStrings) -> String? {
++        switch self {
++        case .notInstalled: return text.notInstalled
++        case .closed: return text.closed
++        case .launching: return text.launching
++        case .ready: return nil
++        }
++    }
++}
++
++private let tileSpring = Animation.spring(response: 0.32, dampingFraction: 0.78)
++
++/// Bounces a drop target's icon once as a file arrives on it, and only then:
++/// the tile the file just left stays still.
++struct DropArrivalBounce: ViewModifier {
++    let selected: Bool
++    let enabled: Bool
++    @State private var arrivals = 0
++
++    func body(content: Content) -> some View {
++        content
++            .symbolEffect(.bounce, value: arrivals)
++            .onChange(of: selected) { _, now in if now && enabled { arrivals += 1 } }
++    }
++}
++
++extension View {
++    func dropArrivalBounce(selected: Bool, enabled: Bool) -> some View {
++        modifier(DropArrivalBounce(selected: selected, enabled: enabled))
++    }
++}
++
++/// One drop tile per reachable device, stacked to fill the column the
++/// island's drop layout reserves for KDE Connect.
++struct KDEConnectDropColumn: View {
++    let target: NotchDropTarget?
++    @ObservedObject private var kde = KDEConnectService.shared
++    @ObservedObject private var l10n = L10n.shared
++    @AppStorage(DefaultsKey.notchDropAnimateSend) private var animated = true
++    private var text: KDEConnectStrings { FeatureStrings.kdeConnect(l10n.language) }
++
++    var body: some View {
++        VStack(spacing: NotchFileToolsSupport.dropSpacing) {
++            if kde.devices.isEmpty {
++                let busy = kde.isRefreshing || kde.appState == .launching
++                NotchDropTile(symbol: busy ? "antenna.radiowaves.left.and.right" : "iphone.slash",
++                               title: kde.appState.message(text) ?? (busy ? text.title : text.noDevices),
++                               selected: false, compact: false, animated: animated)
++                    .opacity(0.55)
++                    .symbolEffect(.variableColor.iterative, isActive: busy && animated)
++            } else {
++                ForEach(kde.devices) { device in
++                    NotchDropTile(symbol: "iphone.radiowaves.left.and.right", title: device.name,
++                                   selected: target == .device(device.id), compact: kde.devices.count > 2,
++                                   animated: animated)
++                        .transition(.scale(scale: 0.9).combined(with: .opacity))
++                }
++            }
++        }
++        .frame(maxWidth: .infinity, maxHeight: .infinity)
++        .animation(animated ? tileSpring : nil, value: kde.devices)
++        .animation(animated ? tileSpring : nil, value: target)
++    }
++}
++
++struct NotchDropTile: View {
++    let symbol: String
++    let title: String
++    let selected: Bool
++    let compact: Bool
++    var animated = true
++
++    var body: some View {
++        Group {
++            if compact {
++                HStack(spacing: 10) {
++                    Image(systemName: symbol).font(.system(size: 18, weight: .light))
++                    Text(title).font(.callout.weight(.medium)).lineLimit(1)
++                }
++            } else {
++                VStack(spacing: 10) {
++                    Image(systemName: symbol).font(.system(size: 28, weight: .light))
++                        .dropArrivalBounce(selected: selected, enabled: animated)
++                    Text(title).font(.callout.weight(.medium)).multilineTextAlignment(.center).lineLimit(2)
++                }
++            }
++        }
++        .padding(12)
++        .frame(maxWidth: .infinity, maxHeight: .infinity)
++        .background(.white.opacity(selected ? 0.14 : 0.04), in: RoundedRectangle(cornerRadius: 20))
++        .overlay {
++            RoundedRectangle(cornerRadius: 20)
++                .strokeBorder(.white.opacity(selected ? 0.7 : 0.2), lineWidth: selected ? 1.5 : 0.75)
++        }
++        .scaleEffect(animated && selected ? 1.03 : 1)
++        .accessibilityElement(children: .combine)
++        .accessibilityAddTraits(selected ? .isSelected : [])
++    }
++}
++
++/// The Files page when only KDE Connect lives there: the devices a drop
++/// can reach, and what was last sent.
++struct KDEConnectPage: View {
++    @ObservedObject private var kde = KDEConnectService.shared
++    @ObservedObject private var l10n = L10n.shared
++    private var text: KDEConnectStrings { FeatureStrings.kdeConnect(l10n.language) }
++
++    var body: some View {
++        VStack(spacing: NotchLayout.rowSpacing) {
++            if kde.appState == .notInstalled {
++                NotchEmptyView(symbol: "iphone.slash", message: text.notInstalled)
++                    .frame(maxHeight: .infinity)
++                Button(text.download) { NSWorkspace.shared.open(KDEConnectService.downloadURL) }
++                    .controlSize(.small)
++            } else {
++                NotchEmptyView(symbol: "iphone.radiowaves.left.and.right", message: text.dropHint)
++                    .frame(maxHeight: .infinity)
++                    .overlay { RoundedRectangle(cornerRadius: 20, style: .continuous)
++                        .strokeBorder(.white.opacity(0.18), style: StrokeStyle(lineWidth: 0.75, dash: [4, 5])) }
++                KDEConnectStatus()
++            }
++        }
++        .frame(maxWidth: .infinity, maxHeight: .infinity)
++    }
++}
++
++/// A one-line strip under the page: the reachable devices, or the send in
++/// progress and how it ended.
++struct KDEConnectStatus: View {
++    @ObservedObject private var kde = KDEConnectService.shared
++    @ObservedObject private var l10n = L10n.shared
++    private var text: KDEConnectStrings { FeatureStrings.kdeConnect(l10n.language) }
++
++    var body: some View {
++        HStack(spacing: 6) {
++            Group {
++                switch kde.sendState {
++                case .sending(let device):
++                    ProgressView().controlSize(.mini)
++                    Text(String(format: text.sendingFormat, device))
++                case .sent(let device):
++                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
++                        .transition(.scale.combined(with: .opacity))
++                    Text(String(format: text.sentFormat, device))
++                case .failed(let device):
++                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
++                    Text(String(format: text.failedFormat, device))
++                case nil:
++                    Image(systemName: kde.appState == .ready ? "iphone.radiowaves.left.and.right" : "iphone.slash")
++                    Text(kde.appState.message(text)
++                         ?? (kde.devices.isEmpty ? text.noDevices : kde.devices.map(\.name).joined(separator: ", ")))
++                }
++            }
++            .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
++            Spacer(minLength: 0)
++            Button { kde.refresh() } label: {
++                Image(systemName: "arrow.clockwise").font(.system(size: 10, weight: .semibold))
++                    .rotationEffect(.degrees(kde.isRefreshing ? 360 : 0))
++                    .animation(kde.isRefreshing ? .linear(duration: 0.8).repeatForever(autoreverses: false) : .default,
++                               value: kde.isRefreshing)
++            }
++            .buttonStyle(.plain).foregroundStyle(.secondary)
++            .help(text.refresh)
++        }
++        .animation(tileSpring, value: kde.sendState)
++        .onAppear { kde.refresh() }
++    }
++}
++
++/// Small drop targets along the bottom of the shelf while one of its tiles
++/// is dragged out: AirDrop and each reachable KDE Connect device. They
++/// replace the hint row for the length of the drag, nothing more.
++struct ShelfSendBar: View {
++    @ObservedObject private var kde = KDEConnectService.shared
++    @ObservedObject private var l10n = L10n.shared
++    @AppStorage(DefaultsKey.notchDropAnimateSend) private var animated = true
++    @State private var targeted: NotchDropTarget?
++
++    var body: some View {
++        let kdeText = FeatureStrings.kdeConnect(l10n.language)
++        HStack(spacing: 6) {
++            Text(FeatureStrings.notchSend(l10n.language).sendTo)
++                .font(.system(size: 10)).foregroundStyle(.secondary)
++            ScrollView(.horizontal, showsIndicators: false) {
++                HStack(spacing: 6) {
++                    if NotchAirDropService.isActive {
++                        pill(.airDrop, symbol: "dot.radiowaves.left.and.right",
++                             title: FeatureStrings.notchAirDrop(l10n.language).tile)
++                    }
++                    if KDEConnectService.isActive {
++                        if kde.devices.isEmpty {
++                            Text(kde.appState.message(kdeText) ?? kdeText.noDevices)
++                                .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
++                        }
++                        ForEach(kde.devices) { device in
++                            pill(.device(device.id), symbol: "iphone.radiowaves.left.and.right", title: device.name)
++                                .transition(.scale(scale: 0.8).combined(with: .opacity))
++                        }
++                    }
++                }
++                .padding(.vertical, 3)
++            }
++        }
++        .animation(animated ? tileSpring : nil, value: kde.devices)
++        .animation(animated ? tileSpring : nil, value: targeted)
++    }
++
++    private func pill(_ target: NotchDropTarget, symbol: String, title: String) -> some View {
++        let selected = targeted == target
++        return HStack(spacing: 5) {
++            Image(systemName: symbol).font(.system(size: 11, weight: .medium))
++                .dropArrivalBounce(selected: selected, enabled: animated)
++            Text(title).font(.system(size: 11, weight: .medium)).lineLimit(1)
++        }
++        .padding(.horizontal, 10).padding(.vertical, 5)
++        .background(Color.primary.opacity(selected ? 0.22 : 0.08), in: Capsule())
++        .overlay { Capsule().strokeBorder(Color.primary.opacity(selected ? 0.7 : 0.18), lineWidth: selected ? 1.2 : 0.75) }
++        .scaleEffect(animated && selected ? 1.08 : 1)
++        .overlay {
++            SendDropArea(onTarget: { inside in
++                if inside { targeted = target } else if targeted == target { targeted = nil }
++            }, onDrop: { pasteboard in
++                targeted = nil
++                return Self.send(pasteboard, to: target)
++            })
++        }
++        .accessibilityElement(children: .combine)
++    }
++}
++
++extension ShelfSendBar {
++    static func send(_ pasteboard: NSPasteboard, to target: NotchDropTarget) -> Bool {
++        switch target {
++        case .airDrop: return NotchAirDropService.send(NotchAirDropService.items(in: pasteboard))
++        case .device(let id): return KDEConnectService.shared.send(KDEConnectService.items(in: pasteboard), to: id)
++        default: return false
++        }
++    }
++}
++
++/// A native drop target exactly the size of one send pill. Only this view
++/// registers for drags, and only while the pill exists, so the shelf and the
++/// island keep receiving every other drop as before.
++struct SendDropArea: NSViewRepresentable {
++    let onTarget: (Bool) -> Void
++    let onDrop: (NSPasteboard) -> Bool
++
++    func makeNSView(context: Context) -> DropView {
++        let view = DropView()
++        view.onTarget = onTarget
++        view.onDrop = onDrop
++        return view
++    }
++
++    func updateNSView(_ view: DropView, context: Context) {
++        view.onTarget = onTarget
++        view.onDrop = onDrop
++    }
++
++    final class DropView: NSView {
++        var onTarget: ((Bool) -> Void)?
++        var onDrop: ((NSPasteboard) -> Bool)?
++
++        override init(frame: NSRect) {
++            super.init(frame: frame)
++            registerForDraggedTypes([.fileURL, .URL])
++        }
++
++        @available(*, unavailable)
++        required init?(coder: NSCoder) { nil }
++
++        /// A shelf tile offers only a move inside the app; anything else is copied.
++        private func operation(_ sender: NSDraggingInfo) -> NSDragOperation {
++            sender.draggingSourceOperationMask.contains(.copy) ? .copy : .move
++        }
++
++        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
++            onTarget?(true)
++            return operation(sender)
++        }
++
++        override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { operation(sender) }
++        override func draggingExited(_ sender: NSDraggingInfo?) { onTarget?(false) }
++
++        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
++            onTarget?(false)
++            return onDrop?(sender.draggingPasteboard) == true
++        }
++    }
++}
+diff --git a/Sources/Vorssaint/UI/Notch/NotchFilesView.swift b/Sources/Vorssaint/UI/Notch/NotchFilesView.swift
+index a36cce33..79536f36 100644
+--- a/Sources/Vorssaint/UI/Notch/NotchFilesView.swift
++++ b/Sources/Vorssaint/UI/Notch/NotchFilesView.swift
+@@ -18,18 +18,45 @@ struct NotchFilesView: View {
+     @State private var showingActions = false
+     @State private var outputPanel: NSSavePanel?
+     @Environment(\.notchSettingsPreview) private var preview
++    @AppStorage(DefaultsKey.notchDropAnimateShelf) private var animateShelf = true
++    @ObservedObject private var dropDemo = NotchDropPreviewDemo.shared
++    @AppStorage(DefaultsKey.notchDropAnimateSend) private var animateSend = true
+     private var text: NotchFilesStrings { FeatureStrings.notchFiles(l10n.language) }
+ 
+     var body: some View {
+         VStack(spacing: NotchLayout.rowSpacing) {
+-            if service.choosingFileDropDestination, AppFeature.mediaTools.isAvailable {
++            if preview, dropDemo.active {
++                NotchDropChooserDemo()
++                    .transition(.opacity)
++            } else if service.choosingFileDropDestination {
+                 HStack(spacing: NotchFileToolsSupport.dropSpacing) {
+-                    dropDestination(FeatureStrings.notch(l10n.language).files, symbol: "tray.and.arrow.down",
+-                                    selected: !service.targetsMediaDrop)
+-                    dropDestination(text.optimizeMedia, symbol: "wand.and.stars", selected: service.targetsMediaDrop,
+-                                    available: archives.canAcceptMediaDrop)
++                    if service.dropOffersShelf {
++                        dropDestination(FeatureStrings.notch(l10n.language).files, symbol: "tray.and.arrow.down",
++                                        selected: service.dropTarget == .shelf)
++                            .transition(.scale(scale: 0.92).combined(with: .opacity))
++                    }
++                    if service.dropOffersMedia {
++                        dropDestination(text.optimizeMedia, symbol: "wand.and.stars", selected: service.targetsMediaDrop,
++                                        available: archives.canAcceptMediaDrop)
++                            .transition(.scale(scale: 0.92).combined(with: .opacity))
++                    }
++                    if service.dropOffersAirDrop {
++                        NotchDropTile(symbol: "dot.radiowaves.left.and.right",
++                                       title: FeatureStrings.notchAirDrop(l10n.language).tile,
++                                       selected: service.dropTarget == .airDrop, compact: false,
++                                       animated: animateSend)
++                            .transition(.scale(scale: 0.92).combined(with: .opacity))
++                    }
++                    if service.dropOffersKDEConnect {
++                        KDEConnectDropColumn(target: service.dropTarget)
++                            .transition(.scale(scale: 0.92).combined(with: .opacity))
++                    }
+                 }
+                 .frame(maxWidth: .infinity, maxHeight: .infinity)
++                .animation(animateShelf || animateSend ? .spring(response: 0.32, dampingFraction: 0.78) : nil,
++                           value: service.dropTarget)
++            } else if !shelfUsable, KDEConnectService.isActive {
++                KDEConnectPage()
+             } else if let session = archives.mediaSession, archives.mediaPresented, AppFeature.mediaTools.isAvailable {
+                 MediaWorkspaceView(compact: true, onClose: archives.closeMedia,
+                                    media: media, initialInputs: session.inputs,
+@@ -83,6 +110,20 @@ struct NotchFilesView: View {
+                         .disabled(archives.isRunning)
+                     }
+                 }
++                // While a tile is dragged out, the row turns into send targets
++                // in the same place, so nothing else on the page moves.
++                .opacity(service.shelfDragOut ? 0 : 1)
++                .overlay {
++                    if service.shelfDragOut {
++                        ShelfSendBar()
++                            .transition(.move(edge: .bottom).combined(with: .opacity))
++                    }
++                }
++                .animation(animateSend ? .spring(response: 0.3, dampingFraction: 0.8) : .easeOut(duration: 0.15),
++                           value: service.shelfDragOut)
++            }
++            if !service.choosingFileDropDestination, shelfUsable, KDEConnectService.isActive {
++                KDEConnectStatus()
+             }
+             if !service.choosingFileDropDestination, !archives.mediaPresented, AppFeature.mediaTools.isAvailable {
+                 archiveStatus
+@@ -114,6 +155,11 @@ struct NotchFilesView: View {
+         }
+     }
+ 
++    /// Without the shelf, the page belongs to KDE Connect alone.
++    private var shelfUsable: Bool {
++        AppFeature.shelf.isAvailable && UserDefaults.standard.bool(forKey: DefaultsKey.shelfEnabled)
++    }
++
+     private func mediaHeightChanged(_ height: CGFloat, id: UUID) {
+         let previous = archives.mediaContentHeight
+         archives.updateMediaHeight(id: id, height: height)
+@@ -126,6 +172,7 @@ struct NotchFilesView: View {
+     private func dropDestination(_ title: String, symbol: String, selected: Bool, available: Bool = true) -> some View {
+         VStack(spacing: 12) {
+             Image(systemName: symbol).font(.system(size: 28, weight: .light))
++                .dropArrivalBounce(selected: selected, enabled: animateShelf)
+             Text(title).font(.callout.weight(.medium)).multilineTextAlignment(.center)
+             if !available { Text(l10n.s.mediaRunning).font(.caption).foregroundStyle(.secondary) }
+         }
+@@ -136,6 +183,7 @@ struct NotchFilesView: View {
+             RoundedRectangle(cornerRadius: 20)
+                 .strokeBorder(.white.opacity(selected ? 0.7 : 0.2), lineWidth: selected ? 1.5 : 0.75)
+         }
++        .scaleEffect(animateShelf && selected ? 1.03 : 1)
+         .accessibilityElement(children: .combine)
+         .accessibilityAddTraits(selected ? .isSelected : [])
+         .opacity(available ? 1 : 0.5)
+diff --git a/Sources/Vorssaint/UI/Settings/FeatureHubSettings.swift b/Sources/Vorssaint/UI/Settings/FeatureHubSettings.swift
+index fcbe818f..80e08b2a 100644
+--- a/Sources/Vorssaint/UI/Settings/FeatureHubSettings.swift
++++ b/Sources/Vorssaint/UI/Settings/FeatureHubSettings.swift
+@@ -1060,6 +1060,8 @@ extension AppFeature {
+         case .notchAgents: return FeatureStrings.notchAgents(L10n.shared.language).title
+         case .notchWatch: return FeatureStrings.notchWatch(L10n.shared.language).title
+         case .notchMascot: return FeatureStrings.notchMascot(L10n.shared.language).title
++        case .notchKDEConnect: return FeatureStrings.kdeConnect(L10n.shared.language).title
++        case .notchAirDrop: return FeatureStrings.notchAirDrop(L10n.shared.language).title
+         case .notch: return FeatureStrings.notch(L10n.shared.language).title
+         case .radialMenu: return FeatureStrings.radialMenu(L10n.shared.language).pageTitle
+         case .scratchpad: return FeatureStrings.scratchpad(L10n.shared.language).pageTitle
+@@ -1144,6 +1146,8 @@ extension AppFeature {
+         case .notchAgents: return FeatureStrings.notchAgents(L10n.shared.language).hubDescription
+         case .notchWatch: return FeatureStrings.notchWatch(L10n.shared.language).description
+         case .notchMascot: return FeatureStrings.notchMascot(L10n.shared.language).hubDescription
++        case .notchKDEConnect: return FeatureStrings.kdeConnect(L10n.shared.language).hubDescription
++        case .notchAirDrop: return FeatureStrings.notchAirDrop(L10n.shared.language).hubDescription
+         case .notch: return FeatureStrings.notch(L10n.shared.language).description
+         case .radialMenu: return FeatureStrings.radialMenu(L10n.shared.language).hubDescription
+         case .scratchpad: return FeatureStrings.scratchpad(L10n.shared.language).hubDescription
+diff --git a/Sources/Vorssaint/UI/Settings/FeatureVisibilitySupport.swift b/Sources/Vorssaint/UI/Settings/FeatureVisibilitySupport.swift
+index e563b44a..98a05ca2 100644
+--- a/Sources/Vorssaint/UI/Settings/FeatureVisibilitySupport.swift
++++ b/Sources/Vorssaint/UI/Settings/FeatureVisibilitySupport.swift
+@@ -368,7 +368,7 @@ extension AppFeature {
+             return FeatureSettingsDestination(.quickTools, sectionAnchor: .cameraPreview)
+         case .wallpaper:
+             return FeatureSettingsDestination(.quickTools, sectionAnchor: .wallpaper)
+-        case .notch, .notchCalendar, .notchNotifications, .notchGestures, .notchTimer, .notchAccessories, .notchLyrics, .notchQueue, .notchLiveEqualizer, .notchDownloads, .notchAgents, .notchWatch: return FeatureSettingsDestination(.notch)
++        case .notch, .notchCalendar, .notchNotifications, .notchGestures, .notchTimer, .notchAccessories, .notchLyrics, .notchQueue, .notchLiveEqualizer, .notchDownloads, .notchAgents, .notchWatch, .notchKDEConnect, .notchAirDrop: return FeatureSettingsDestination(.notch)
+         case .notchMascot: return FeatureSettingsDestination(.notchMascot)
+         case .radialMenu: return FeatureSettingsDestination(.radialMenu)
+         case .scratchpad:
+@@ -423,7 +423,7 @@ enum FeatureVisibilitySupport {
+         case .superKey: return [.superKey]
+         case .textSnippets: return [.textSnippets]
+         case .screenshot: return [.screenshot, .screenRecorder, .screenOCR, .colorPicker]
+-        case .notch: return [.notch, .notchCalendar, .notchNotifications, .notchGestures, .notchTimer, .notchAccessories, .notchLyrics, .notchQueue, .notchLiveEqualizer, .notchDownloads, .notchAgents, .notchWatch, .notchMascot]
++        case .notch: return [.notch, .notchCalendar, .notchNotifications, .notchGestures, .notchTimer, .notchAccessories, .notchLyrics, .notchQueue, .notchLiveEqualizer, .notchDownloads, .notchAgents, .notchWatch, .notchMascot, .notchKDEConnect, .notchAirDrop]
+         case .notchMascot: return [.notchMascot]
+         case .radialMenu: return [.radialMenu]
+         case .commandBar: return [.commandBar]
+diff --git a/Sources/Vorssaint/UI/Settings/NotchSendSettings.swift b/Sources/Vorssaint/UI/Settings/NotchSendSettings.swift
+new file mode 100644
+index 00000000..82acd641
+--- /dev/null
++++ b/Sources/Vorssaint/UI/Settings/NotchSendSettings.swift
+@@ -0,0 +1,144 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright (C) 2026 Vorssaint
++
++import SwiftUI
++
++/// Options for the island's drop targets, under the Files section.
++struct NotchSendSettingsControls: View {
++    @ObservedObject private var l10n = L10n.shared
++    @ObservedObject private var features = FeatureRuntime.shared
++    @AppStorage(DefaultsKey.notchDropAnimateShelf) private var animateShelf = true
++    @AppStorage(DefaultsKey.notchDropAnimateSend) private var animateSend = true
++    @AppStorage(DefaultsKey.notchShelfSendTargets) private var shelfSend = true
++    @AppStorage(DefaultsKey.notchKDEConnectAutoLaunch) private var autoLaunch = true
++    private var text: NotchSendStrings { FeatureStrings.notchSend(l10n.language) }
++
++    var body: some View {
++        let _ = features.revision
++        let kde = AppFeature.notchKDEConnect.isAvailable
++        let sends = kde || AppFeature.notchAirDrop.isAvailable
++        Divider()
++        VStack(alignment: .leading, spacing: 12) {
++            VStack(alignment: .leading, spacing: 2) {
++                Text(text.section).font(.headline)
++                Text(text.previewHint).font(.caption).foregroundStyle(.secondary)
++            }
++            row("tray.and.arrow.down", text.animateShelf, text.animateShelfHint, $animateShelf)
++            if sends {
++                row("sparkles", text.animateSend, text.animateSendHint, $animateSend)
++                if AppFeature.shelf.isAvailable {
++                    row("hand.point.up.left", text.shelfSend, text.shelfSendHint, $shelfSend)
++                }
++            }
++            if kde { row("iphone.radiowaves.left.and.right", text.autoLaunch, text.autoLaunchHint, $autoLaunch) }
++        }
++        .contentShape(Rectangle())
++        // The preview beside plays a file passing over the drop targets.
++        .onHover { NotchDropPreviewDemo.shared.hover($0) }
++        .onChange(of: [animateShelf, animateSend, shelfSend]) { NotchDropPreviewDemo.shared.hover(true) }
++        .onDisappear { NotchDropPreviewDemo.shared.active = false }
++    }
++
++    private func row(_ symbol: String, _ title: String, _ caption: String, _ isOn: Binding<Bool>) -> some View {
++        SettingsRow(symbol: symbol, title: title, caption: caption) {
++            Toggle(title, isOn: isOn).labelsHidden().toggleStyle(.switch)
++        }
++    }
++}
++
++/// Whether the settings preview plays the drop demo instead of the page.
++final class NotchDropPreviewDemo: ObservableObject {
++    static let shared = NotchDropPreviewDemo()
++    @Published var active = false
++    private var linger: DispatchWorkItem?
++    private init() {}
++
++    /// Keeps playing a moment after the pointer leaves the options, long
++    /// enough to look across at the preview.
++    func hover(_ inside: Bool) {
++        linger?.cancel(); linger = nil
++        if inside { if !active { active = true }; return }
++        let work = DispatchWorkItem { [weak self] in self?.active = false }
++        linger = work
++        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
++    }
++}
++
++/// A file passing over each drop target in turn, with the motion the
++/// current settings give it: the island's drop chooser as it will look.
++struct NotchDropChooserDemo: View {
++    @ObservedObject private var kde = KDEConnectService.shared
++    @ObservedObject private var l10n = L10n.shared
++    @AppStorage(DefaultsKey.notchDropAnimateShelf) private var animateShelf = true
++    @AppStorage(DefaultsKey.notchDropAnimateSend) private var animateSend = true
++    @State private var step = 0
++    @Namespace private var file
++    private let timer = Timer.publish(every: 1.1, on: .main, in: .common).autoconnect()
++
++    private var devices: [KDEConnectDevice] {
++        kde.devices.isEmpty ? [KDEConnectDevice(id: "demo", name: FeatureStrings.notchSend(l10n.language).phone)] : kde.devices
++    }
++
++    private var shelf: Bool {
++        AppFeature.shelf.isAvailable && UserDefaults.standard.bool(forKey: DefaultsKey.shelfEnabled)
++    }
++
++    private var targets: [NotchDropTarget] {
++        var all: [NotchDropTarget] = []
++        if shelf { all.append(.shelf) }
++        if NotchAirDropService.isActive { all.append(.airDrop) }
++        if KDEConnectService.isActive { all += devices.map { .device($0.id) } }
++        return all
++    }
++
++    private var target: NotchDropTarget? {
++        let all = targets
++        return all.isEmpty ? nil : all[step % all.count]
++    }
++
++    var body: some View {
++        HStack(spacing: NotchFileToolsSupport.dropSpacing) {
++            if shelf {
++                tile(.shelf, symbol: "tray.and.arrow.down", title: FeatureStrings.notch(l10n.language).files,
++                     animated: animateShelf)
++            }
++            if NotchAirDropService.isActive {
++                tile(.airDrop, symbol: "dot.radiowaves.left.and.right",
++                     title: FeatureStrings.notchAirDrop(l10n.language).tile, animated: animateSend)
++            }
++            if KDEConnectService.isActive {
++                VStack(spacing: NotchFileToolsSupport.dropSpacing) {
++                    ForEach(devices) { device in
++                        tile(.device(device.id), symbol: "iphone.radiowaves.left.and.right", title: device.name,
++                             animated: animateSend, compact: devices.count > 2)
++                    }
++                }
++            }
++        }
++        .frame(maxWidth: .infinity, maxHeight: .infinity)
++        .onReceive(timer) { _ in
++            let next = targets.count > 0 ? (step + 1) % targets.count : 0
++            let lands = targets.isEmpty ? nil : targets[next]
++            let animated = lands == .shelf ? animateShelf : animateSend
++            withAnimation(animated ? .spring(response: 0.32, dampingFraction: 0.78) : .easeInOut(duration: 0.2)) {
++                step = next
++            }
++        }
++    }
++
++    private func tile(_ id: NotchDropTarget, symbol: String, title: String, animated: Bool,
++                      compact: Bool = false) -> some View {
++        let selected = target == id
++        return NotchDropTile(symbol: symbol, title: title, selected: selected, compact: compact, animated: animated)
++            .overlay(alignment: .bottomTrailing) {
++                if selected {
++                    Image(systemName: "doc.fill")
++                        .font(.system(size: 16))
++                        .foregroundStyle(.white.opacity(0.9))
++                        .shadow(radius: 3)
++                        .padding(10)
++                        .matchedGeometryEffect(id: "file", in: file)
++                }
++            }
++    }
++}
+diff --git a/Sources/Vorssaint/UI/Settings/NotchSettings.swift b/Sources/Vorssaint/UI/Settings/NotchSettings.swift
+index dd291cc9..3eda0129 100644
+--- a/Sources/Vorssaint/UI/Settings/NotchSettings.swift
++++ b/Sources/Vorssaint/UI/Settings/NotchSettings.swift
+@@ -482,6 +482,7 @@ struct NotchSettings: View {
+                 Text(FeatureStrings.notchFiles(l10n.language).optimizeDropHint)
+                     .font(.caption).foregroundStyle(.secondary)
+             }
++            NotchSendSettingsControls()
+         case .clipboard:
+             destination(FeatureStrings.clipboard(l10n.language).title, symbol: "doc.on.clipboard", value: $clipboardWindow, available: AppFeature.clipboardHistory.isAvailable)
+             switchRow("doc.on.clipboard", text.clipboardActivity, caption: text.privacy, isOn: $clipboard)
+diff --git a/Sources/Vorssaint/UI/Shelf/ShelfTilesView.swift b/Sources/Vorssaint/UI/Shelf/ShelfTilesView.swift
+index 912ac946..a5d324d8 100644
+--- a/Sources/Vorssaint/UI/Shelf/ShelfTilesView.swift
++++ b/Sources/Vorssaint/UI/Shelf/ShelfTilesView.swift
+@@ -707,6 +707,7 @@ final class ShelfTileView: NSView, NSDraggingSource {
+             return draggingItem
+         }
+         shelf.beginInternalDrag(ids: draggedIDs, from: window)
++        ShelfSendState.shared.begin()
+         shelf.beginInteraction()
+         beginDraggingSession(with: draggingItems, event: event, source: self)
+     }
+@@ -722,6 +723,8 @@ final class ShelfTileView: NSView, NSDraggingSource {
+         // A non-empty operation means the drop was accepted somewhere — pull the
+         // dragged tiles out of the shelf. A cancelled drag leaves them.
+         DispatchQueue.main.async {
++            NotchService.shared.shelfDragEnded()
++            ShelfSendState.shared.end()
+             ShelfService.shared.completeInternalDrag(dropAccepted: operation != [])
+             ShelfService.shared.absorbOwnDrag()
+         }
+diff --git a/Sources/Vorssaint/UI/Shelf/ShelfView.swift b/Sources/Vorssaint/UI/Shelf/ShelfView.swift
+index 04792b93..669701b3 100644
+--- a/Sources/Vorssaint/UI/Shelf/ShelfView.swift
++++ b/Sources/Vorssaint/UI/Shelf/ShelfView.swift
+@@ -27,6 +27,7 @@ struct ShelfView: View {
+     @State private var shareAnchor = ShelfSharePickerAnchor.Anchor()
+     @State private var pinButtonHovered = false
+     @State private var closeButtonHovered = false
++    @ObservedObject private var send = ShelfSendState.shared
+ 
+     private static let panelWidth: CGFloat = 304
+     private static let tileAreaHeight: CGFloat = 188
+@@ -56,6 +57,17 @@ struct ShelfView: View {
+         .overlay(alignment: .topLeading) {
+             topMoveHandle
+         }
++        // A tile dragged out turns the footer into AirDrop and device targets.
++        .overlay(alignment: .bottom) {
++            if send.draggingOut, !shelf.items.isEmpty {
++                ShelfSendBar()
++                    .padding(.horizontal, 10).padding(.vertical, 4)
++                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
++                    .padding(.horizontal, 10).padding(.bottom, 10)
++                    .transition(.move(edge: .bottom).combined(with: .opacity))
++            }
++        }
++        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: send.draggingOut)
+         .animation(.easeOut(duration: 0.15), value: isDropTargeted)
+         .animation(.easeOut(duration: 0.18), value: shelf.items)
+         .onHover { inside in
+diff --git a/Tests/FeatureCatalogTests.swift b/Tests/FeatureCatalogTests.swift
+index 0c0deca5..ec89f42d 100644
+--- a/Tests/FeatureCatalogTests.swift
++++ b/Tests/FeatureCatalogTests.swift
+@@ -386,7 +386,7 @@ enum FeatureCatalogTests {
+ 
+         // MARK: Features hub catalog
+ 
+-        suite.expect(AppFeature.allCases.count == 77, "feature catalog has 77 features")
++        suite.expect(AppFeature.allCases.count == 79, "feature catalog has 79 features")
+         suite.expect(Set(AppFeature.allCases.map(\.rawValue)).count == AppFeature.allCases.count,
+                "feature ids are unique")
+         suite.expect(AppFeature.allCases.map(\.rawValue) == [
+@@ -399,7 +399,7 @@ enum FeatureCatalogTests {
+             "keepAwake", "brightness", "extraBrightness", "bluetoothSleep",
+             "quickLauncher", "quickToggles", "colorPicker", "screenOCR", "cleaningMode", "mediaTools",
+             "cleaner", "uninstaller", "homebrew", "appUpdates", "screenshot", "cameraPreview",
+-            "radialMenu", "scratchpad", "commandBar", "screenRecorder", "wallpaper", "killProcess", "portManager", "notch", "notchCalendar", "notchNotifications", "notchGestures", "notchTimer", "notchAccessories", "notchLyrics", "notchQueue", "notchLiveEqualizer", "notchDownloads", "notchAgents", "notchWatch", "notchMascot",
++            "radialMenu", "scratchpad", "commandBar", "screenRecorder", "wallpaper", "killProcess", "portManager", "notch", "notchCalendar", "notchNotifications", "notchGestures", "notchTimer", "notchAccessories", "notchLyrics", "notchQueue", "notchLiveEqualizer", "notchDownloads", "notchAgents", "notchWatch", "notchMascot", "notchKDEConnect", "notchAirDrop",
+             "monitorCPU", "monitorGPU", "monitorMemory", "monitorNetwork", "monitorDisk", "monitorPower",
+             "connectedDevices", "fanControl",
+         ], "feature ids are stable (they persist inside availability keys)")
+@@ -689,15 +689,15 @@ enum FeatureCatalogTests {
+         suite.expect(AppFeature.features(in: .dynamicIsland) == [
+             .notch, .notchCalendar, .notchNotifications, .notchGestures, .notchTimer,
+             .notchAccessories, .notchLyrics, .notchQueue, .notchLiveEqualizer, .notchDownloads, .notchAgents, .notchWatch,
+-            .notchMascot,
++            .notchMascot, .notchKDEConnect, .notchAirDrop,
+         ], "the Dynamic Island heads its own hub section, followed by its extensions")
+         suite.expect(AppFeature.dynamicIslandExtensions
+                 == Array(AppFeature.features(in: .dynamicIsland).dropFirst()),
+                "the Dynamic Island's extensions are every other feature of its section")
+         suite.expect(AppFeature.notch.initialInstallGroup
+-                        == AppFeature.features(in: .dynamicIsland).filter { $0 != .notchMascot && $0 != .notchAgents }
++                        == AppFeature.features(in: .dynamicIsland).filter { $0 != .notchMascot && $0 != .notchAgents && $0 != .notchKDEConnect && $0 != .notchAirDrop }
+                      && AppFeature.mixer.initialInstallGroup == [.mixer],
+-                     "choosing the island keeps Agents and the companion as separate installs")
++                     "choosing the island keeps Agents, the companion, KDE Connect and AirDrop as separate installs")
+         suite.expect(AppFeature.dynamicIslandExtensions.contains(.notchMascot)
+                         && !AppFeature.notch.initialInstallGroup.contains(.notchMascot)
+                         && AppFeature.notchMascot.permissions.isEmpty
+diff --git a/Tests/ShelfDropRoutingTests.swift b/Tests/ShelfDropRoutingTests.swift
+index 48e6e677..efce679b 100644
+--- a/Tests/ShelfDropRoutingTests.swift
++++ b/Tests/ShelfDropRoutingTests.swift
+@@ -17,6 +17,7 @@ enum ShelfDropRoutingContract {
+         static func isEnabled() -> Bool { enabled }
+         static func modules() -> [NotchModule] { visibleModules }
+         static func showsFiles() -> Bool { isEnabled() && modules().contains(.files) }
++        static func routesShelf() -> Bool { showsFiles() }
+     }
+     enum UserDefaults {
+         static var standard = Store()
+@@ -32,7 +33,20 @@ enum ShelfDropRoutingContract {
+         var draggingLocation = CGPoint.zero
+         var draggingSource: AnyObject?
+     }
++    enum NotchAirDropService {
++        static func items(in pasteboard: NSPasteboard) -> [URL] { [] }
++        static func send(_ urls: [URL]) -> Bool { true }
++    }
++    final class KDEConnectService {
++        static var shared = KDEConnectService()
++        var devices: [KDEConnectDevice] = []
++        var sent: [(urls: [URL], device: String)] = []
++        static func items(in pasteboard: NSPasteboard) -> [URL] { [] }
++        func refresh() {}
++        func send(_ urls: [URL], to deviceID: String) -> Bool { sent.append((urls, deviceID)); return true }
++    }
+     class ShelfState {
++        func canAcceptPasteboard(_ pasteboard: NSPasteboard) -> Bool { true }
+         var dockedPanel = Window()
+         var dockCompletions = 0
+         var promises: [Int] = []
+@@ -60,7 +74,15 @@ enum ShelfDropRoutingContract {
+         var heldDrag = true
+         var dragPlaceholder = true
+         var choosingFileDropDestination = false
+-        var targetsMediaDrop = false
++        var dropTarget: NotchDropTarget?
++        var dropOffersShelf = false
++        var dropOffersMedia = false
++        var dropOffersKDEConnect = false
++        var dropOffersAirDrop = false
++        var canAcceptKDEConnectDrop = false
++        var canAcceptAirDropDrop = false
++        func collapse() {}
++        var targetsMediaDrop: Bool { dropTarget == .media }
+         var pinned = false
+         var geometry = NotchGeometry(screen: CGRect(x: 0, y: 0, width: 1440, height: 900), safeAreaTop: 32, cameraWidth: 180)
+         var expandedGeometry: NotchGeometry { geometry }
+diff --git a/build.sh b/build.sh
+index 2729728a..106240c1 100755
+--- a/build.sh
++++ b/build.sh
+@@ -272,6 +272,10 @@ if (( TEST )); then
+         Sources/Vorssaint/Core/NotchWatchStrings.swift
+         Sources/Vorssaint/Services/Notch/NotchWatchSupport.swift
+         Sources/Vorssaint/Core/NotchMascotStrings.swift
++        Sources/Vorssaint/Core/KDEConnectStrings.swift
++        Sources/Vorssaint/Core/NotchAirDropStrings.swift
++        Sources/Vorssaint/Core/NotchSendStrings.swift
++        Sources/Vorssaint/Services/Notch/NotchDropSupport.swift
+         Sources/Vorssaint/Services/Notch/NotchMascotSupport.swift
+         Sources/Vorssaint/Services/CommandBar/CommandBarDropletMotion.swift
+         Sources/Vorssaint/Services/Notch/NotchFileToolsSupport.swift
