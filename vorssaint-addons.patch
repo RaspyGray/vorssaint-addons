@@ -23,6 +23,30 @@ index 22415e03..1b94a2c4 100644
          // Leaving folds the wings it rests in, and coming back greets.
          .notchMascot: {
              if AppFeature.notch.isAvailable { NotchService.shared.syncWithPreferences() }
+diff --git a/Sources/Vorssaint/Core/AppInfo.swift b/Sources/Vorssaint/Core/AppInfo.swift
+index 72b278c4..09a98e5b 100644
+--- a/Sources/Vorssaint/Core/AppInfo.swift
++++ b/Sources/Vorssaint/Core/AppInfo.swift
+@@ -25,6 +25,19 @@ enum AppInfo {
+         (Bundle.main.bundleIdentifier ?? "").hasSuffix(".dev")
+     }
+ 
++    /// Built by the add-on installer on top of an official release. The
++    /// installer keeps it current, so the in-app updater stays out of the way.
++    static var isAddonBuild: Bool {
++#if VORSSAINT_ADDONS
++        true
++#else
++        false
++#endif
++    }
++
++    /// The in-app updater may replace this copy of the app.
++    static var updatesItself: Bool { !isDeveloperBuild && !isAddonBuild }
++
+     /// True when the current version is a pre-release (e.g. 3.3.4-beta.1 or 3.3.4-rc.1).
+     static var isBeta: Bool {
+         if isDeveloperBuild && UserDefaults.standard.bool(forKey: DefaultsKey.simulateBetaUI) {
 diff --git a/Sources/Vorssaint/Core/Defaults.swift b/Sources/Vorssaint/Core/Defaults.swift
 index 2b58a0d9..2ed7efc3 100644
 --- a/Sources/Vorssaint/Core/Defaults.swift
@@ -860,6 +884,55 @@ index c2e8353f..8acfdd05 100644
                  let defaults = UserDefaults.standard
                  if defaults.bool(forKey: DefaultsKey.shelfShakeToOpen) {
                      self.handleDrag(event)
+diff --git a/Sources/Vorssaint/Services/Update/UpdateService.swift b/Sources/Vorssaint/Services/Update/UpdateService.swift
+index 270ab77d..33f0a608 100644
+--- a/Sources/Vorssaint/Services/Update/UpdateService.swift
++++ b/Sources/Vorssaint/Services/Update/UpdateService.swift
+@@ -67,7 +67,7 @@ final class UpdateService: ObservableObject {
+         }
+         // The local dev build never auto-updates, but can simulate the
+         // "update available" UI via the `simulateUpdate` default, for testing.
+-        if AppInfo.isDeveloperBuild {
++        if !AppInfo.updatesItself {
+             if UserDefaults.standard.bool(forKey: DefaultsKey.simulateUpdate) {
+                 let simulatedVersion = AppInfo.isBeta ? "9.9.9-beta.1" : "9.9.9"
+                 state = .available(version: simulatedVersion)
+@@ -100,7 +100,7 @@ final class UpdateService: ObservableObject {
+     // MARK: - Check
+ 
+     func check(manual: Bool) {
+-        if AppInfo.isDeveloperBuild {
++        if !AppInfo.updatesItself {
+             // No real update target; reflect the simulation default so the
+             // notification UI can be exercised locally.
+             if UserDefaults.standard.bool(forKey: DefaultsKey.simulateUpdate) {
+@@ -193,7 +193,7 @@ final class UpdateService: ObservableObject {
+     /// or the panel opens, so a new release surfaces promptly without hammering the
+     /// API. The hourly timer is the floor; this makes it feel immediate.
+     func checkIfStale(maxAge: TimeInterval = 15 * 60) {
+-        if AppInfo.isDeveloperBuild { return }
++        if !AppInfo.updatesItself { return }
+         guard autoCheckEnabled else { return }
+         switch state {
+         case .checking, .downloading, .installing: return
+@@ -206,7 +206,7 @@ final class UpdateService: ObservableObject {
+     // MARK: - Download & install
+ 
+     func downloadAndInstall() {
+-        if AppInfo.isDeveloperBuild { return }  // never replace the local dev build over itself
++        if !AppInfo.updatesItself { return }  // never replace a local build over itself
+         guard let downloadURL else { return }
+         // Pre-flight BEFORE spending the download: a translocated app or one
+         // running from a read-only volume (the mounted DMG) can never be
+@@ -467,7 +467,7 @@ final class UpdateService: ObservableObject {
+         let s = L10n.shared.s
+         Notifier.post(title: s.updateNotifyTitle,
+                       body: "\(s.updateInstallFailedBody) (\(code))")
+-        if !AppInfo.isDeveloperBuild {
++        if AppInfo.updatesItself {
+             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                 self?.check(manual: false)
+             }
 diff --git a/Sources/Vorssaint/UI/Notch/NotchDropViews.swift b/Sources/Vorssaint/UI/Notch/NotchDropViews.swift
 new file mode 100644
 index 00000000..a36ffa4b
@@ -1617,10 +1690,20 @@ index 48e6e677..efce679b 100644
          var geometry = NotchGeometry(screen: CGRect(x: 0, y: 0, width: 1440, height: 900), safeAreaTop: 32, cameraWidth: 180)
          var expandedGeometry: NotchGeometry { geometry }
 diff --git a/build.sh b/build.sh
-index 2729728a..106240c1 100755
+index 2729728a..bb6b1ba2 100755
 --- a/build.sh
 +++ b/build.sh
-@@ -272,6 +272,10 @@ if (( TEST )); then
+@@ -57,6 +57,9 @@ else
+     APP_OPTIMIZATION_FLAGS=(-O)
+     BUILD_CONFIGURATION="release"
+ fi
++# The add-on installer builds the official app with its patch applied; that
++# copy leaves updates to the installer instead of the in-app updater.
++[[ "${VORSSAINT_ADDONS:-0}" == 1 ]] && BUILD_VARIANT_FLAGS+=(-D VORSSAINT_ADDONS)
+ FAN_HELPER_ID="$APP_BUNDLE_ID.fan-control"
+ # Now Playing is read through /usr/bin/perl loading this library; see
+ # Sources/NowPlayingAdapter. Staged under Contents/Frameworks, signed on its own.
+@@ -272,6 +275,10 @@ if (( TEST )); then
          Sources/Vorssaint/Core/NotchWatchStrings.swift
          Sources/Vorssaint/Services/Notch/NotchWatchSupport.swift
          Sources/Vorssaint/Core/NotchMascotStrings.swift

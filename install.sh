@@ -2,12 +2,13 @@
 # Vorssaint Add-ons: KDE Connect and AirDrop drop targets for the Dynamic Island.
 #
 # Takes the latest official Vorssaint release, applies the add-on patch on top,
-# builds it and installs "Vorssaint (Developer).app" next to the official app.
+# builds it and installs it as /Applications/Vorssaint.app, in place of the
+# official download. Settings stay as they are.
 #
 #   install.sh                   install (with the daily update check), or update
 #   install.sh --force           rebuild even if already up to date
 #   install.sh --no-auto-update  install without the daily check, or turn it off
-#   install.sh --uninstall       remove the add-on build and the daily check
+#   install.sh --uninstall       go back to the official Vorssaint
 #
 # It can also run straight from GitHub:
 #   curl -fsSL https://raw.githubusercontent.com/RaspyGray/vorssaint-addons/main/install.sh | zsh
@@ -17,15 +18,18 @@ export GIT_TERMINAL_PROMPT=0
 
 ADDON_REPO="https://github.com/RaspyGray/vorssaint-addons.git"
 UPSTREAM="https://github.com/vorssaint/vorssaint-utils.git"
+RELEASES_API="https://api.github.com/repos/vorssaint/vorssaint-utils/releases/latest"
 HOME_DIR="$HOME/Library/Application Support/Vorssaint Addons"
 INSTALLED_COPY="$HOME_DIR/addon"
 STATE="$HOME_DIR/installed-version"
 LOG="$HOME_DIR/install.log"
 AGENT_ID="com.vorssaint.addons.update"
 AGENT="$HOME/Library/LaunchAgents/$AGENT_ID.plist"
-APP="/Applications/Vorssaint (Developer).app"
+APP="/Applications/Vorssaint.app"
+# Earlier versions of the add-on installed a second, separate app.
+OLD_APP="/Applications/Vorssaint (Developer).app"
 OFFICIAL_ID="com.vorssaint.utils"
-DEV_ID="com.vorssaint.utils.dev"
+OLD_ID="com.vorssaint.utils.dev"
 
 FORCE=0; QUIET=0; AUTO=""; UNINSTALL=0; SYNCED=0
 for arg in "$@"; do
@@ -49,11 +53,28 @@ disable_agent() {
     rm -f "$AGENT"
 }
 
+# The installed app carries the add-ons, rather than an official update
+# installed over it since.
+has_addons() {
+    [[ -x "$APP/Contents/MacOS/Vorssaint" ]] && command grep -q notchKDEConnectEnabled "$APP/Contents/MacOS/Vorssaint"
+}
+
 if (( UNINSTALL )); then
     disable_agent
-    osascript -e 'quit app "Vorssaint (Developer)"' >/dev/null 2>&1 || true
-    rm -rf "$APP" "$HOME_DIR"
-    print "Removed Vorssaint (Developer) and the daily update check. The official Vorssaint is untouched."
+    say "Downloading the official Vorssaint…"
+    DMG_URL="$(curl -fsSL "$RELEASES_API" | sed -n 's/.*"browser_download_url": *"\([^"]*\.dmg\)".*/\1/p' | head -1)"
+    [[ -n "$DMG_URL" ]] || { say "Could not reach GitHub. Check the connection and try again."; exit 1; }
+    TMP="$(mktemp -d)"
+    curl -fsSL "$DMG_URL" -o "$TMP/Vorssaint.dmg"
+    hdiutil attach -nobrowse -quiet -mountpoint "$TMP/mount" "$TMP/Vorssaint.dmg"
+    osascript -e 'quit app "Vorssaint"' >/dev/null 2>&1 || true
+    sleep 1
+    rm -rf "$APP"
+    ditto "$TMP/mount/Vorssaint.app" "$APP"
+    hdiutil detach -quiet "$TMP/mount" || true
+    rm -rf "$TMP" "$HOME_DIR"
+    open "$APP"
+    print "Back to the official Vorssaint. Your settings are unchanged."
     exit 0
 fi
 
@@ -131,15 +152,17 @@ TAG="$(git ls-remote --tags --refs "$UPSTREAM" 'v*' | sed 's#.*/##' | command gr
 PATCH_SUM="$(shasum "$PATCH" | cut -d' ' -f1)"
 WANT="$TAG $PATCH_SUM"
 
-if (( ! FORCE )) && [[ -f "$STATE" && "$(cat "$STATE")" == "$WANT" && -d "$APP" ]]; then
+if (( ! FORCE )) && [[ -f "$STATE" && "$(cat "$STATE")" == "$WANT" ]] && has_addons; then
     say "Already up to date: Vorssaint $TAG with the add-ons."
     exit 0
 fi
 
-FIRST_INSTALL=0
-[[ -d "$APP" ]] || FIRST_INSTALL=1
+FIRST_INSTALL=1
+has_addons && FIRST_INSTALL=0
+WAS_RUNNING=0
+pgrep -xq Vorssaint && WAS_RUNNING=1
 
-say "Building Vorssaint $TAG with the add-ons. This takes a few minutes…"
+say "Building Vorssaint $TAG with the add-ons. This takes several minutes…"
 SRC="$HOME_DIR/src"
 rm -rf "$SRC"
 git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$TAG" "$UPSTREAM" "$SRC"
@@ -149,13 +172,15 @@ if git apply --whitespace=nowarn "$PATCH" 2>/dev/null; then
 elif patch -p1 --forward --fuzz=3 --no-backup-if-mismatch < "$PATCH" >> "$LOG" 2>&1; then
     say "The patch needed small adjustments for $TAG; applied."
 else
-    say "The add-ons do not fit Vorssaint $TAG yet. Your current build keeps working; the patch needs an update."
+    say "The add-ons do not fit Vorssaint $TAG yet. Your current version keeps working; the patch needs an update."
     notify "Vorssaint $TAG is out, but the add-ons need an update before they can be rebuilt."
     exit 1
 fi
 
-if ! ./build.sh --dev --install >> "$LOG" 2>&1; then
-    say "The build failed; details in $LOG. Your current build keeps working."
+# The finished app replaces /Applications/Vorssaint.app; build.sh quits the
+# running one first.
+if ! VORSSAINT_ADDONS=1 ./build.sh --install >> "$LOG" 2>&1; then
+    say "The build failed; details in $LOG. Your current version keeps working."
     notify "Rebuilding Vorssaint $TAG with the add-ons failed."
     exit 1
 fi
@@ -163,21 +188,28 @@ fi
 print -- "$WANT" > "$STATE"
 cd "$HOME_DIR"
 rm -rf "$SRC"
+
+# Coming from the earlier two-app setup: keep the settings used there, and
+# remove the second app.
+if [[ -d "$OLD_APP" ]]; then
+    osascript -e 'quit app "Vorssaint (Developer)"' >/dev/null 2>&1 || true
+    if defaults read "$OLD_ID" >/dev/null 2>&1; then
+        defaults export "$OFFICIAL_ID" "$HOME_DIR/settings-before-merge.plist" 2>/dev/null || true
+        defaults export "$OLD_ID" - | defaults import "$OFFICIAL_ID" -
+        SUPPORT="$HOME/Library/Application Support"
+        if [[ -d "$SUPPORT/$OLD_ID" ]]; then
+            rm -rf "$SUPPORT/$OFFICIAL_ID"
+            cp -R "$SUPPORT/$OLD_ID" "$SUPPORT/$OFFICIAL_ID"
+        fi
+    fi
+    rm -rf "$OLD_APP"
+    say "Removed the separate Vorssaint (Developer) app; its settings are now in Vorssaint."
+fi
+
 say "Installed: $APP (Vorssaint $TAG with KDE Connect and AirDrop)."
 notify "Vorssaint $TAG with the add-ons is installed."
-
 if (( FIRST_INSTALL && ! QUIET )); then
-    # Start from the settings of an official Vorssaint already in use.
-    if defaults read "$OFFICIAL_ID" >/dev/null 2>&1 && ! defaults read "$DEV_ID" >/dev/null 2>&1; then
-        defaults export "$OFFICIAL_ID" - | defaults import "$DEV_ID" -
-        SUPPORT="$HOME/Library/Application Support"
-        [[ -d "$SUPPORT/$OFFICIAL_ID" && ! -d "$SUPPORT/$DEV_ID" ]] && cp -R "$SUPPORT/$OFFICIAL_ID" "$SUPPORT/$DEV_ID"
-        say "Copied your settings from the official Vorssaint."
-    fi
-    # Two islands at once would sit on top of each other.
-    if pgrep -xq Vorssaint; then
-        osascript -e 'quit app "Vorssaint"' >/dev/null 2>&1 || true
-        say "Quit the official Vorssaint, so only one Dynamic Island runs."
-    fi
-    open "$APP"
+    say "macOS may ask once more for Vorssaint's permissions, since this copy was built on your Mac."
 fi
+(( WAS_RUNNING || ! QUIET )) && open "$APP"
+exit 0
